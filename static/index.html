@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rover console</title>
+<style>
+:root{--bg:#0e1819;--panel:#152628;--line:#25403f;--ink:#e6eee8;--dim:#8fa8a2;--go:#5fd4b0;--warn:#ff6a4d;--amber:#f2b84b}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 Bahnschrift,"Segoe UI",system-ui,sans-serif;min-height:100vh;padding:20px}
+body.alert{background:#2a1210}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;gap:12px;flex-wrap:wrap}
+h1{font-size:22px;font-weight:600}
+.chip{padding:5px 12px;border:1px solid var(--line);border-radius:99px;color:var(--dim);font-size:13px}
+.chip.on{color:var(--go);border-color:var(--go)}.chip.off{color:var(--warn);border-color:var(--warn)}
+main{display:grid;grid-template-columns:1.1fr 1fr 1.2fr;gap:16px}
+@media(max-width:980px){main{grid-template-columns:1fr}}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+h2{font-size:15px;font-weight:600;color:var(--dim);margin-bottom:10px}
+#banner{display:none;background:var(--warn);color:#240a05;font-weight:700;padding:10px 14px;border-radius:8px;margin-bottom:16px}
+body.alert #banner{display:block}
+.gauge{width:100%;max-width:300px;display:block;margin:0 auto}
+.gauge text{fill:var(--ink)}
+#gasnum{font-size:44px;font-weight:700;text-anchor:middle}
+.gl{font-size:13px;fill:var(--dim)!important;text-anchor:middle}
+.row{display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)}
+.row b{font-weight:600}.ok{color:var(--go)}.bad{color:var(--warn)}
+#spark{width:100%;height:46px;margin-top:8px}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:280px;margin:6px auto 14px}
+button{font:inherit;color:var(--ink);background:#1d3638;border:1px solid var(--line);border-radius:10px;padding:16px 0;cursor:pointer}
+button:hover{border-color:var(--go)}button:active{background:#264648}
+button:focus-visible,input:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+button.blocked{opacity:.45;border-color:var(--warn)}
+#stop{background:var(--warn);color:#240a05;font-weight:700;border-color:var(--warn)}
+.dur{display:flex;align-items:center;gap:10px;color:var(--dim)}.dur input{flex:1;accent-color:var(--go)}
+.key{color:var(--dim);font-size:13px;margin-top:10px}
+#log{height:150px;overflow:auto;font-size:13px;color:var(--dim);border-top:1px solid var(--line);margin-top:12px;padding-top:8px}
+#chat{height:260px;overflow:auto;display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.m{padding:8px 12px;border-radius:10px;max-width:88%}.me{align-self:flex-end;background:#1f4a46}.bot{background:#1d3033;border:1px solid var(--line)}
+form{display:flex;gap:8px}
+input[type=text]{flex:1;background:#0e1819;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit}
+form button{padding:10px 14px}#mic.live{background:var(--warn);color:#240a05}
+label.sp{display:block;margin-top:8px;color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+<header><h1>Rover console</h1><span id="link" class="chip">Connecting to car…</span></header>
+<div id="banner">Gas or smoke detected. Move away and ventilate the area.</div>
+<main>
+<section aria-label="Sensors">
+  <h2>Gas level</h2>
+  <svg class="gauge" viewBox="0 0 300 190" role="img" aria-label="Gas gauge">
+    <path d="M30 160 A120 120 0 0 1 270 160" fill="none" stroke="#25403f" stroke-width="22" stroke-linecap="round"/>
+    <path id="arc" d="M30 160 A120 120 0 0 1 270 160" fill="none" stroke="#5fd4b0" stroke-width="22" stroke-linecap="round" pathLength="100" stroke-dasharray="0 100"/>
+    <line id="thr" stroke="#f2b84b" stroke-width="3"/>
+    <text id="gasnum" x="150" y="138">–</text>
+    <text class="gl" x="150" y="168" id="gstate">waiting for car</text>
+  </svg>
+  <svg id="spark" viewBox="0 0 200 46" preserveAspectRatio="none"><polyline id="pl" fill="none" stroke="#5fd4b0" stroke-width="1.5" points=""/></svg>
+  <div class="row"><span>Obstacle ahead</span><b id="obs">–</b></div>
+  <div class="row"><span>Motion</span><b id="mot">–</b></div>
+  <div class="row"><span>Wi-Fi signal</span><b id="rssi">–</b></div>
+</section>
+<section aria-label="Drive">
+  <h2>Drive</h2>
+  <div class="pad">
+    <span></span><button data-d="forward" id="bf">Forward</button><span></span>
+    <button data-d="left">Left</button><button id="stop" data-d="stop">Stop</button><button data-d="right">Right</button>
+    <span></span><button data-d="backward">Back</button><span></span>
+  </div>
+  <div class="dur"><span>Move time</span><input id="ms" type="range" min="500" max="3000" step="250" value="1000" aria-label="Move time"><b id="msv">1.0 s</b></div>
+  <p class="key">Keys: arrows or W A S D to drive, space to stop.</p>
+  <div id="log" aria-live="polite"></div>
+</section>
+<section aria-label="Chat">
+  <h2>Talk to the rover</h2>
+  <div id="chat"></div>
+  <form id="f"><input type="text" id="t" placeholder="Type “move front”, “check gas”, or ask anything" autocomplete="off">
+    <button type="button" id="mic" aria-label="Speak">Mic</button><button type="submit">Send</button></form>
+  <label class="sp"><input type="checkbox" id="spk" checked> Speak replies in the browser</label>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id), THRESH=2000, MAXV=4095;
+const hist=[]; let obstacle=false;
+function log(m){const l=$('log');l.insertAdjacentHTML('afterbegin',`<div>${new Date().toLocaleTimeString()}  ${m}</div>`)}
+async function api(p,body){const r=await fetch(p,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});return r.json()}
+// threshold tick on the gauge
+(()=>{const a=Math.PI*(1-THRESH/MAXV),cx=150,cy=160,r1=100,r2=134,t=$('thr');
+t.setAttribute('x1',cx+r1*Math.cos(a));t.setAttribute('y1',cy-r1*Math.sin(a));t.setAttribute('x2',cx+r2*Math.cos(a));t.setAttribute('y2',cy-r2*Math.sin(a))})();
+async function poll(){
+  let s; try{s=await api('/api/sensors')}catch(e){s={error:1}}
+  const up=!s.error, c=$('link'); c.textContent=up?'Car online':'Car offline'; c.className='chip '+(up?'on':'off');
+  if(!up){$('gstate').textContent='no connection';return}
+  const g=s.gas_raw; $('gasnum').textContent=g; $('arc').setAttribute('stroke-dasharray',`${Math.min(g/MAXV,1)*100} 100`);
+  const alert=!!s.gas_alert; document.body.classList.toggle('alert',alert);
+  $('arc').setAttribute('stroke',alert?'#ff6a4d':'#5fd4b0');
+  $('gstate').textContent=s.gas_warming_up?'sensor warming up':alert?'gas detected':'air is clear';
+  obstacle=!!s.obstacle; const o=$('obs'); o.textContent=obstacle?'Yes, blocked':'Clear'; o.className=obstacle?'bad':'ok';
+  $('bf').classList.toggle('blocked',obstacle); $('mot').textContent=s.motion; $('rssi').textContent=s.wifi_rssi+' dBm';
+  hist.push(g); if(hist.length>40)hist.shift();
+  $('pl').setAttribute('points',hist.map((v,i)=>`${i*200/39},${44-v/MAXV*42}`).join(' '));
+}
+setInterval(poll,1000); poll();
+async function drive(d){const ms=+$('ms').value; const r=await api('/api/move',{dir:d,ms}); log(`${d==='stop'?'stop':d+' '+ms/1000+' s'} → ${r.reply}`)}
+document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>drive(b.dataset.d));
+$('ms').oninput=e=>$('msv').textContent=(e.target.value/1000).toFixed(1)+' s';
+const KEYS={ArrowUp:'forward',w:'forward',ArrowDown:'backward',s:'backward',ArrowLeft:'left',a:'left',ArrowRight:'right',d:'right',' ':'stop'};
+addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.repeat)return;const d=KEYS[e.key.length>1?e.key:e.key.toLowerCase()];if(d){e.preventDefault();drive(d)}});
+function say(who,txt){const c=$('chat');c.insertAdjacentHTML('beforeend',`<div class="m ${who}"></div>`);c.lastChild.textContent=txt;c.scrollTop=c.scrollHeight}
+async function ask(text){
+  say('me',text); const r=await api('/api/chat',{text}); if(!r.reply)return; say('bot',r.reply); log(`${r.kind}: ${text}`);
+  if($('spk').checked&&'speechSynthesis' in window){speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(r.reply))}
+}
+$('f').onsubmit=e=>{e.preventDefault();const v=$('t').value.trim();$('t').value='';if(v)ask(v)};
+$('mic').onclick=async()=>{
+  const b=$('mic'); b.classList.add('live'); b.disabled=true; b.textContent='Listening…';
+  try{
+    const r=await api('/api/listen',{});
+    if(r.text) ask(r.text); else say('bot',"I didn't catch that. Try again.");
+  }catch(e){ say('bot','Mic error: '+e) }
+  b.classList.remove('live'); b.disabled=false; b.textContent='Mic';
+};
+</script>
+</body>
+</html>

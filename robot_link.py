@@ -1,18 +1,38 @@
-import sys
-import urllib.request
+import os
 
-ROBOT_IP = "192.168.137.55"   # <- replace with the IP from the Serial Monitor
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
+_raw = os.getenv("ROBOT_IP", "robotcar.local").strip()
+_raw = _raw.replace("http://", "").replace("https://", "").strip("/")
+BASE_URL = f"http://{_raw}"
+MOVE_TIMEOUT = 3
 
 
-def send(direction: str, ms: int = 1000) -> str:
-    url = f"http://{ROBOT_IP}/cmd?dir={direction}&ms={ms}"
+def send(direction: str, ms: int | None = None) -> str:
+    """Send forward/backward/left/right/stop to the ESP32.
+    Returns the car's reply ('ok ...', 'blocked: ...') or 'error: ...'."""
+    params = {"ms": int(ms)} if ms and direction != "stop" else None
     try:
-        with urllib.request.urlopen(url, timeout=3) as r:
-            return r.read().decode()
-    except Exception as e:
-        return f"error: {e}"
+        r = requests.get(f"{BASE_URL}/{direction}", params=params, timeout=MOVE_TIMEOUT)
+        r.raise_for_status()
+        return r.text.strip()
+    except requests.RequestException as e:
+        return f"error: {str(e)[:100]}"
+
+
+def get_sensors(timeout: float = 2.0) -> dict:
+    """Read /sensors from the ESP32. Returns a dict, or {'error': ...}."""
+    try:
+        r = requests.get(f"{BASE_URL}/sensors", timeout=timeout)
+        r.raise_for_status()
+        return r.json()
+    except (requests.RequestException, ValueError) as e:
+        return {"error": str(e)[:100]}
 
 
 if __name__ == "__main__":
-    direction = sys.argv[1] if len(sys.argv) > 1 else "stop"
-    print(send(direction))
+    print("Car link:", send("stop"))
+    print("Sensors:", get_sensors())

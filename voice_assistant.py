@@ -7,7 +7,7 @@ from google import genai
 from google.genai import types
 
 from stt import calibrate, listen, transcribe   # speech-to-text
-from robot_link import send                      # ESP32 link
+from robot_link import send, get_sensors         # ESP32 link
 from tts import speak                            # ElevenLabs voice (Windows voice as fallback)
 
 load_dotenv()
@@ -29,6 +29,9 @@ MAX_HISTORY = 20
 DEFAULT_MOVE_MS = 1000
 MAX_MOVE_MS = 3000
 
+AUTO_GAS_WARNING = True      # speak a warning by itself when gas is detected
+GAS_WARN_COOLDOWN = 30       # seconds between automatic warnings
+
 SYSTEM_PROMPT = (
     "You are the voice of a small robot car. Talk like a warm, natural person: "
     "casual, curious and a little playful, never stiff or robotic. "
@@ -40,6 +43,8 @@ SYSTEM_PROMPT = (
     "person asks for an explanation or a story. "
     "You do not move the car yourself. The car only moves when the person says "
     "exactly: move front, move back, move left, move right, or stop. "
+    "The car can also check its own sensors when the person says things like "
+    "check gas, or is anything in front. "
     "If someone asks you to drive in some other way, kindly remind them of those commands."
 )
 
@@ -112,7 +117,77 @@ def run_command(direction: str, ms: int) -> str:
     if result.startswith("error"):
         print(f"  [robot link] {result}")
         return "I can't reach the car right now."
+    if result.startswith("blocked"):
+        return "I can't go forward, something is in front of me."
     return "Okay, stopping." if direction == "stop" else f"Okay, moving {direction}."
+
+# ----------------------------------------------------------------- sensors
+# Questions like "check gas" or "is anything in front" are answered from the
+# ESP32 sensors. Both a topic word and a check word are needed, so general
+# chat such as "what is natural gas" still goes to Gemini.
+
+GAS_WORDS = {"gas", "smoke", "leak", "leakage"}
+GAS_CHECK_WORDS = {"check", "level", "levels", "detect", "detected", "any", "there",
+                   "safe", "sensor", "reading", "status", "smell"}
+
+
+def parse_sensor_query(text: str):
+    """Return 'gas', 'obstacle', 'all', or None."""
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    if not words or len(words) > 9:
+        return None
+    w = set(words)
+
+    if w & {"sensor", "sensors"} and w & {"check", "status", "all", "readings", "reading", "report"}:
+        return "all"
+    if w & GAS_WORDS and w & GAS_CHECK_WORDS:
+        return "gas"
+    if w & {"obstacle", "obstacles"}:
+        return "obstacle"
+    if w & {"front", "ahead"} and w & {"anything", "something", "clear", "blocked", "there"}:
+        return "obstacle"
+    return None
+
+
+def gas_text(s: dict) -> str:
+    if s.get("gas_warming_up"):
+        return "My gas sensor is still warming up. Ask me again in a little while."
+    if s.get("gas_alert"):
+        return f"Warning! I am detecting gas or smoke. The reading is {s.get('gas_raw')}."
+    return f"No gas detected. The reading is {s.get('gas_raw')}."
+
+
+def obstacle_text(s: dict) -> str:
+    return ("Yes, something is right in front of me." if s.get("obstacle")
+            else "The way ahead looks clear.")
+
+
+def run_sensor_query(kind: str) -> str:
+    s = get_sensors()
+    if "error" in s:
+        print(f"  [sensors] {s['error']}")
+        return "I can't reach my sensors right now."
+    if kind == "gas":
+        return gas_text(s)
+    if kind == "obstacle":
+        return obstacle_text(s)
+    return f"{gas_text(s)} {obstacle_text(s)}"
+
+
+_last_warning = 0.0
+
+
+def check_gas_alarm():
+    """Called between turns. Speaks a warning if the gas sensor is in alert."""
+    global _last_warning
+    if not AUTO_GAS_WARNING or time.time() - _last_warning < GAS_WARN_COOLDOWN:
+        return
+    s = get_sensors(timeout=1.5)
+    if s.get("gas_alert"):
+        _last_warning = time.time()
+        msg = f"Warning! I am detecting gas or smoke. The reading is {s.get('gas_raw')}."
+        print(f"Robot: {msg}\n")
+        speak(msg)
 
 # ------------------------------------------------------------------ gemini
 
@@ -163,6 +238,7 @@ def ask_gemini(user_text: str) -> str | None:
 def main():
     print("\nRobot Voice Assistant")
     print("Say 'move front', 'move back', 'move left', 'move right' or 'stop'.")
+    print("Say 'check gas' or 'is anything in front' to use the sensors.")
     print("Anything else is a normal conversation.")
     print("Say 'goodbye' to quit, or 'reset' to clear memory.\n")
 
@@ -174,6 +250,8 @@ def main():
           else "Hello. I am ready, but I can't reach the car.")
 
     while True:
+        check_gas_alarm()
+
         print("Listening...", flush=True)
         audio = listen(threshold)
         if audio is None:
@@ -203,7 +281,15 @@ def main():
             speak(reply)
             continue
 
-        # 2) everything else is a normal conversation with Gemini
+        # 2) sensor questions are answered from the ESP32
+        sensor_kind = parse_sensor_query(text)
+        if sensor_kind:
+            reply = run_sensor_query(sensor_kind)
+            print(f"Robot: {reply}\n")
+            speak(reply)
+            continue
+
+        # 3) everything else is a normal conversation with Gemini
         print("Thinking...", flush=True)
         reply = ask_gemini(text) or "Sorry, I couldn't reach my brain. Try again in a moment."
         print(f"Robot: {reply}\n")
